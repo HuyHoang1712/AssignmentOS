@@ -86,24 +86,38 @@ int vmap_page_range(struct pcb_t *caller,           // process call
                     struct framephy_struct *frames, // list of the mapped frames
                     struct vm_rg_struct *ret_rg)    // return mapped region, the real mapped fp
 {                                                   // no guarantee all given pages are mapped
-  //struct framephy_struct *fpit;
-  int pgit = 0;
-  int pgn = PAGING_PGN(addr);
+  if (frames == NULL || pgnum <= 0) {
+    return -1;
+  }
 
-  /* TODO: update the rg_end and rg_start of ret_rg 
-  //ret_rg->rg_end =  ....
-  //ret_rg->rg_start = ...
-  //ret_rg->vmaid = ...
-  */
+  struct framephy_struct *frame_ite = frames;
+  int page_ite = 0;
+  int page_num = PAGING_PGN(addr);
+  
+  int vmaid = caller->mm->mmap->vm_id;
+
+  ret_rg->vmaid = vmaid;
+  ret_rg->rg_start = addr;
+  ret_rg->rg_end = addr + pgnum * PAGING_PAGESZ;
+  ret_rg->rg_next = NULL;
+  
 
   /* TODO map range of frame to address space
-   *      [addr to addr + pgnum*PAGING_PAGESZ
-   *      in page table caller->mm->pgd[]
-   */
-
-  /* Tracking for later page replacement activities (if needed)
-   * Enqueue new usage page */
-  enlist_pgn_node(&caller->mm->fifo_pgn, pgn + pgit);
+  *      [addr to addr + pgnum*PAGING_PAGESZ
+  *      in page table caller->mm->pgd[]
+  */
+  for (page_ite = 0; page_ite < pgnum; page_ite++) {
+    uint32_t *pte = &caller->mm->pgd[page_num + page_ite];
+    if (frame_ite == NULL) {
+      return -1; 
+    }
+    if (PAGING_PAGE_PRESENT(*pte)) {
+      continue;  
+    }
+    pte_set_fpn(pte, frames[page_ite].fpn);
+    frame_ite = frame_ite->fp_next;
+    enlist_pgn_node(&caller->mm->fifo_pgn, page_num + page_ite); 
+  }
 
   return 0;
 }
@@ -117,24 +131,41 @@ int vmap_page_range(struct pcb_t *caller,           // process call
 
 int alloc_pages_range(struct pcb_t *caller, int req_pgnum, struct framephy_struct **frm_lst)
 {
-  int pgit, fpn;
-  struct framephy_struct *newfp_str = NULL;
+  int page_ite, fpn;
+  struct framephy_struct *new_frame_str = NULL;
+  struct framephy_struct *curr_frame = NULL;
 
   /* TODO: allocate the page 
   //caller-> ...
   //frm_lst-> ...
   */
 
-  for (pgit = 0; pgit < req_pgnum; pgit++)
-  {
+  for (page_ite = 0; page_ite < req_pgnum; page_ite++) {
   /* TODO: allocate the page 
-   */
-    if (MEMPHY_get_freefp(caller->mram, &fpn) == 0)
-    {
-      newfp_str->fpn = fpn;
+    */
+    if (MEMPHY_get_freefp(caller->mram, &fpn) == 0) {
+     
+      struct framephy_struct *new_frame = malloc(sizeof(struct framephy_struct));
+      if (new_frame == NULL) {
+          return -1; 
+      }
+      new_frame->fpn = fpn;
+      new_frame->owner = caller->mm;
+      new_frame->fp_next = NULL;  
+
+      if (new_frame_str == NULL) {
+        new_frame_str = new_frame;  
+      } 
+      else {
+          curr_frame->fp_next = new_frame;  
+      }
+
+      curr_frame = new_frame; 
+
+      frm_lst[page_ite] = new_frame;
     }
-    else
-    { // TODO: ERROR CODE of obtaining somes but not enough frames
+    else { 
+      return -1;
     }
   }
 
@@ -215,27 +246,61 @@ int __swap_cp_page(struct memphy_struct *mpsrc, int srcfpn,
 int init_mm(struct mm_struct *mm, struct pcb_t *caller)
 {
   struct vm_area_struct *vma0 = malloc(sizeof(struct vm_area_struct));
+  if (!vma0) {
+      return -1;
+  }
 
   mm->pgd = malloc(PAGING_MAX_PGN * sizeof(uint32_t));
-
+  if (!mm->pgd) {
+      free(vma0); 
+      return -1;
+  }
   /* By default the owner comes with at least one vma */
+  for (int i = 0; i < PAGING_MAX_PGN; i++) {
+      mm->pgd[i] = 0;
+  }
+
+  // Khởi tạo vma0
   vma0->vm_id = 0;
   vma0->vm_start = 0;
   vma0->vm_end = vma0->vm_start;
   vma0->sbrk = vma0->vm_start;
+  vma0->vm_freerg_list = NULL;
+
   struct vm_rg_struct *first_rg = init_vm_rg(vma0->vm_start, vma0->vm_end);
   enlist_vm_rg_node(&vma0->vm_freerg_list, first_rg);
 
-  /* TODO update VMA0 next */
-  // vma0->next = ...
+  vma0->vm_mm = mm;
 
-  /* Point vma owner backward */
-  vma0->vm_mm = mm; 
+  // struct vm_area_struct *vma1 = malloc(sizeof(struct vm_area_struct));
+  // if (!vma1) {
+  //     free(vma0);  
+  //     free(mm->pgd); 
+  //     return -1;
+  // }
 
-  /* TODO: update mmap */
-  //mm->mmap = ...
+  // /* TODO update VMA0 next */
+  // vma0->vm_next = vma1; 
 
-  return 0;
+  vma0->vm_next = NULL; // Chưa có vma tiếp theo
+
+  // // Khởi tạo vma1 (heap)
+  // vma1->vm_id = 1;
+  // vma1->vm_start = vma0->vm_end; 
+  // vma1->vm_end = vma1->vm_start + PAGING_PAGESZ; 
+  // vma1->sbrk = vma1->vm_start;
+  // vma1->vm_freerg_list = NULL;
+
+  // struct vm_rg_struct *second_rg = init_vm_rg(vma1->vm_start, vma1->vm_end);
+  // enlist_vm_rg_node(&vma1->vm_freerg_list, second_rg);
+
+  // vma1->vm_next = NULL;  
+
+  // vma1->vm_mm = mm;
+
+  mm->mmap = vma0;
+
+  return 0;  // Thành công
 }
 
 struct vm_rg_struct *init_vm_rg(int rg_start, int rg_end)
