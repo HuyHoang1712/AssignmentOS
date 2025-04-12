@@ -54,15 +54,20 @@ struct vm_rg_struct *get_vm_area_node_at_brk(struct pcb_t *caller, int vmaid, in
 {
   struct vm_rg_struct * newrg;
   /* TODO retrive current vma to obtain newrg, current comment out due to compiler redundant warning*/
-  //struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
+  struct vm_area_struct *cur_vma = get_vma_by_num(caller->mm, vmaid);
 
   newrg = malloc(sizeof(struct vm_rg_struct));
 
-  /* TODO: update the newrg boundary
-  // newrg->rg_start = ...
-  // newrg->rg_end = ...
-  */
+  if(cur_vma == NULL) {
+    return NULL;
+  } 
 
+  newrg = malloc(sizeof(struct vm_rg_struct));
+
+  // TODO: update the newrg boundary
+  newrg -> rg_start = cur_vma -> sbrk;
+  newrg -> rg_end = cur_vma -> sbrk + size;
+ 
   return newrg;
 }
 
@@ -79,7 +84,23 @@ int validate_overlap_vm_area(struct pcb_t *caller, int vmaid, int vmastart, int 
 
   /* TODO validate the planned memory area is not overlapped */
 
+  struct vm_area_struct *vma = get_vma_by_num(caller->mm, vmaid);
+
+  if (vma == NULL) {
+    return -1;
+  } 
+
+  struct vm_rg_struct *currentFreerg = vma->vm_freerg_list;
+
+  while (currentFreerg != NULL) {
+      if (!(vmaend <= currentFreerg -> rg_start || vmastart >= currentFreerg -> rg_end)) {
+          return -1;
+      }
+      currentFreerg = currentFreerg -> rg_next;
+  }
+
   return 0;
+
 }
 
 /*inc_vma_limit - increase vm area limits to reserve space for new variable
@@ -105,6 +126,8 @@ int inc_vma_limit(struct pcb_t *caller, int vmaid, int inc_sz)
   /* TODO: Obtain the new vm area based on vmaid */
   //cur_vma->vm_end... 
   // inc_limit_ret...
+
+  cur_vma->vm_end += inc_sz;
 
   if (vm_map_ram(caller, area->rg_start, area->rg_end, 
                     old_end, incnumpage , newrg) < 0)
