@@ -16,7 +16,7 @@
 
 int __sys_memmap(struct pcb_t *caller, struct sc_regs* regs)
 {
-   int memop = regs->a1;
+   int memop = regs->a1;//Truyền vào lựa chọn syscall
    BYTE value;
 
    switch (memop) {
@@ -24,7 +24,8 @@ int __sys_memmap(struct pcb_t *caller, struct sc_regs* regs)
             /* Reserved process case*/
             break;
    case SYSMEM_INC_OP:
-            inc_vma_limit(caller, regs->a2, regs->a3);
+            int ret = inc_vma_limit(caller, regs->a2, regs->a3);
+            if(ret<0) return -1;
             break;
    case SYSMEM_SWP_OP:
             __mm_swap_page(caller, regs->a2, regs->a3);

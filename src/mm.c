@@ -7,29 +7,33 @@
 #include "mm.h"
 #include <stdlib.h>
 #include <stdio.h>
-
 /*
  * init_pte - Initialize PTE entry
  */
+//Khởi tạo 1 entry trong bảng trang 
+
 int init_pte(uint32_t *pte,
-             int pre,    // present
-             int fpn,    // FPN
-             int drt,    // dirty
-             int swp,    // swap
-             int swptyp, // swap type
-             int swpoff) // swap offset
+             int pre,    // present: trang đã tham chiếu tới bộ nhớ vật lí
+             int fpn,    // FPN: frame vật lí chứa trang
+             int drt,    // dirty: có bị chỉnh sửa gì k
+             int swp,    // swap: có bị hoán đổi ra swap k
+             int swptyp, // swap type: loại hoán trang (RAM , SSD,...)
+             int swpoff) // swap offset: vị trí offet trong swap
 {
-  if (pre != 0) {
-    if (swp == 0) { // Non swap ~ page online
+  if (pre != 0) { //Trang đã nằm trong bộ nhớ vật lí 
+    if (swp == 0) { // Non swap ~ page online //Trang ánh xạ đến frame
       if (fpn == 0)
-        return -1;  // Invalid setting
+        return -1;  // Invalid setting //Hệ thống coi frame = 0 là k hợp lệ
 
       /* Valid setting with FPN */
       SETBIT(*pte, PAGING_PTE_PRESENT_MASK);
+      // set bit 31 = 1 
       CLRBIT(*pte, PAGING_PTE_SWAPPED_MASK);
+      //set bit 30 = 0 
       CLRBIT(*pte, PAGING_PTE_DIRTY_MASK);
-
+      // CHưa đc sửa
       SETVAL(*pte, fpn, PAGING_PTE_FPN_MASK, PAGING_PTE_FPN_LOBIT);
+      // set 12 bit cho fpn
     }
     else
     { // page swapped
@@ -51,6 +55,7 @@ int init_pte(uint32_t *pte,
  * @swptyp : swap type
  * @swpoff : swap offset
  */
+// CHỉnh sửa pte nếu đã swap từ ram sang SWAP
 int pte_set_swap(uint32_t *pte, int swptyp, int swpoff)
 {
   SETBIT(*pte, PAGING_PTE_PRESENT_MASK);
@@ -67,6 +72,7 @@ int pte_set_swap(uint32_t *pte, int swptyp, int swpoff)
  * @pte   : target page table entry (PTE)
  * @fpn   : frame page number (FPN)
  */
+//CHỉnh sửa nếu chuyển ngược lại Ram
 int pte_set_fpn(uint32_t *pte, int fpn)
 {
   SETBIT(*pte, PAGING_PTE_PRESENT_MASK);
@@ -80,31 +86,72 @@ int pte_set_fpn(uint32_t *pte, int fpn)
 /*
  * vmap_page_range - map a range of page at aligned address
  */
-int vmap_page_range(struct pcb_t *caller,           // process call
-                    int addr,                       // start address which is aligned to pagesz
-                    int pgnum,                      // num of mapping page
-                    struct framephy_struct *frames, // list of the mapped frames
-                    struct vm_rg_struct *ret_rg)    // return mapped region, the real mapped fp
+//Hàm ánh xạ 1 dải khung trang vật lí (frame ) vào 1 vùng nhớ địa chỉ ảo của tiến trình
+//CHính là bước Insert PTE của Fig 6
+// Vmap_page là cái ánh xạ vào các trang ảo , range là nhiều
+int vmap_page_range(struct pcb_t *caller,           // process call //Con trỏ đến đối tượng
+                    int addr,                       // start address which is aligned to pagesz //addr là địa chỉ trong kgian bộ nhớ ảo mà tiến trình muốn ánh xạ đến
+                    int pgnum,                      // num of mapping page  // SỐ trang trong bộ nhớ cần ánh xạ
+                    struct framephy_struct *frames, // list of the mapped frames // danh sách các khung trang vật lí mà đc ánh xạ vào ko gian bộ nhớ ảo
+                    struct vm_rg_struct *ret_rg)    // return mapped region, the real mapped fp // Dùng để return vùng nhớ ảo này
 {                                                   // no guarantee all given pages are mapped
+  //  lƯU Ý LÀ CÁC TRANG MUỐN ÁNH XẠ ĐẾN LÀ ĐANG TRỐNG HAY K
+  //Chắc là đang trống , nếu k thì việc xóa toàn bộ dữ liệu của vùng nhớ ảo đó có thể ảnh hưởng tiến trình khác
   //struct framephy_struct *fpit;
   int pgit = 0;
-  int pgn = PAGING_PGN(addr);
+  int pgn = PAGING_PGN(addr); // Xác định vị trí trang từ địa chỉ đã canh chỉnh cho trước
 
   /* TODO: update the rg_end and rg_start of ret_rg 
+  //Cập nhập thông tin cho ret_rg
   //ret_rg->rg_end =  ....
   //ret_rg->rg_start = ...
   //ret_rg->vmaid = ...
   */
-
+ struct framephy_struct *frames_run = frames;//Dùng để di chuyển trong linked list
+ ret_rg->rg_start = addr;
+ ret_rg->rg_end = addr + pgnum * PAGING_PAGESZ;
+ ret_rg->rg_next = NULL;
   /* TODO map range of frame to address space
    *      [addr to addr + pgnum*PAGING_PAGESZ
    *      in page table caller->mm->pgd[]
    */
+  //ÁNh xạ các trang vật lí vào không gian bộ nhớ ảo
+  //Nếu đã có trang đang sử dụng
+  int check = 0 ;//Dùng để kiểm tra xem có trang nào sd chưa
+  for (int i = 0; i < pgnum; i++) {
+    int page_index = i + pgn;
+    if (PAGING_PAGE_PRESENT(caller->mm->pgd[page_index])) {
+        check = -1;
+        break;
+    }
+}
+  if (check == -1 ){//Trả toàn bộ vùng nhớ mới xin đc từ Ram về Ram chưa sử dụng
+     // Trả lại toàn bộ frame
+     while (frames_run != NULL) {
+      struct framephy_struct* tmp = frames_run;
+      frames_run = frames_run->fp_next;
+      tmp->fp_next = caller->mram->free_fp_list;
+      caller->mram->free_fp_list = tmp;
+  }
+  return -1;
+  }
 
+  for(; pgit  < pgnum; pgit++){
+    int virtual_page = pgn + pgit ; //CHỉ số trang trong bộ nhớ ảo
+    int frame = frames_run->fpn;//Lấy số khung trang vât lí 
+    struct framephy_struct* frame_tach_roi = frames_run;
+    //Gán frames tiếp theo cho lần sau chạy
+    frames_run = frames_run->fp_next;
+    //Thêm frame tách rời vào ds đã sử dụng
+    frame_tach_roi->fp_next = caller->mram->used_fp_list;
+    caller->mram->used_fp_list = frame_tach_roi;
+    init_pte(&caller->mm->pgd[virtual_page],1,frame,0,0,0,0);
+    
   /* Tracking for later page replacement activities (if needed)
    * Enqueue new usage page */
+  //Thêm page đã map đó vào fifo
   enlist_pgn_node(&caller->mm->fifo_pgn, pgn + pgit);
-
+}
   return 0;
 }
 
@@ -114,31 +161,112 @@ int vmap_page_range(struct pcb_t *caller,           // process call
  * @req_pgnum : request page num
  * @frm_lst   : frame list
  */
-
+//Hàm này mục tiêu  cung cấp 1 dải frame cho tiến trình và lưu các thông tin liên quan vào danh sách frm_list
+//Hàm này giúp tạo frame cho hàm trên
 int alloc_pages_range(struct pcb_t *caller, int req_pgnum, struct framephy_struct **frm_lst)
 {
+  //Hiện thực frm_lst bằng cách linked_list
+  //frm_lst là con trỏ trả về danh sách frame đang trống
+  if(req_pgnum > caller->mram->maxsz / 256) return -3000;  // Kích thước yêu cầu quá lớn
   int pgit, fpn;
-  struct framephy_struct *newfp_str = NULL;
-
+  struct framephy_struct *newfp_str = NULL;//head danh sách
+  struct framephy_struct  *fp_hung = NULL;//con trỏ mới ra đời
+  struct framephy_struct *last_fp = NULL;//tail danh sách
   /* TODO: allocate the page 
   //caller-> ...
   //frm_lst-> ...
   */
-
+  int check = 0 ; //Kiểm tra xem việc xin bộ nhớ có thành công không
+//Lặp qua tìm đủ các frame trống , hoặc bị ép trống
   for (pgit = 0; pgit < req_pgnum; pgit++)
   {
   /* TODO: allocate the page 
    */
+   //Cấp phát bộ nhớ cho khung trang mới
+    fp_hung = malloc(sizeof(struct framephy_struct));
     if (MEMPHY_get_freefp(caller->mram, &fpn) == 0)
-    {
-      newfp_str->fpn = fpn;
+    {//Vì memphy_get_freefp đã giải phóng vùng nhớ thực quản lí frame nên cần tạo lại
+      fp_hung->fpn = fpn;
+      fp_hung->owner = caller->mm;
+      fp_hung->fp_next = NULL;
+      //Thêm vào danh sách trả về
+      if (newfp_str == NULL) {
+        newfp_str = fp_hung;  // Nếu danh sách trống, khởi tạo danh sách với phần tử đầu tiên
+        last_fp = fp_hung;
+      } else {
+        last_fp->fp_next = fp_hung;  // Kết nối phần tử mới vào danh sách
+        last_fp = fp_hung;
+      }
+
     }
     else
     { // TODO: ERROR CODE of obtaining somes but not enough frames
+      //Nếu không cấp phát được thì ép buộc các page đầu tiên trả về ram 
+      //Lấy cái được thêm vài fifo đầu tiên
+      struct pgn_t * first_page = caller->mm->fifo_pgn;
+      if(first_page == NULL) return -1 ;
+      while(first_page->pg_next != NULL){
+        first_page = first_page->pg_next;
+      }
+      uint32_t pte = caller->mm->pgd[first_page->pgn];
+      int fpn_cho_ram = PAGING_FPN(pte);
+      //Giải mã pgd của nó để lấy ram và chuyển toàn bộ nội dung này qua bộ nhớ SWAP
+      if(MEMPHY_get_freefp(caller->active_mswp, &fpn) == 0){
+        // Nếu chuyển qua đc 
+      if(__swap_cp_page(caller->mram,fpn_cho_ram,caller->active_mswp,fpn) == 0) {
+      //Cập nhập pte 
+      pte_set_swap(&caller->mm->pgd[first_page->pgn], 0, fpn); // Cập nhật offset và loại
+      fp_hung->fpn = fpn_cho_ram;
+      fp_hung->owner = caller->mm;
+      fp_hung->fp_next = NULL;
+      //Thêm vào danh sách trả về
+      if (newfp_str == NULL) {
+        newfp_str = fp_hung;  // Nếu danh sách trống, khởi tạo danh sách với phần tử đầu tiên
+        last_fp = fp_hung;
+      } else {
+        last_fp->fp_next = fp_hung;  // Kết nối phần tử mới vào danh sách
+        last_fp = fp_hung;
+      }
+      //Cập nhập vùng nhớ trống của active_mswp
+      struct framephy_struct* frame_can_chuyen = malloc(sizeof(struct framephy_struct));
+      frame_can_chuyen->owner = caller->mm;
+      frame_can_chuyen->fpn = fpn;
+      frame_can_chuyen->fp_next = caller->active_mswp->used_fp_list;
+      caller->active_mswp->used_fp_list = frame_can_chuyen;
+      //Xóa trang ra khỏi fifo
+      struct pgn_t *prev = NULL, *cur = caller->mm->fifo_pgn;
+      while (cur->pg_next != NULL) {
+      prev = cur;
+      cur = cur->pg_next;
+      }
+      if (prev != NULL) {
+      prev->pg_next = NULL;
+      } else {
+    caller->mm->fifo_pgn = NULL;
+      }
+      }
+      else{
+        check = -1 ; 
+        break;
+      }
+    }
+    else{
+      check = -1;
+      break;
     }
   }
-
-  return 0;
+}
+  if (check == -1 ){//Trả lại vùng nhớ vừa xin vì k  đủ
+    while (newfp_str != NULL) {
+      struct framephy_struct* tmp = newfp_str;
+      newfp_str= newfp_str->fp_next;
+      tmp->fp_next = caller->mram->free_fp_list;
+      caller->mram->free_fp_list = tmp;
+  }
+  }
+  //Trả về danh sách
+  *frm_lst = newfp_str;
+  return check;
 }
 
 /*
@@ -150,10 +278,13 @@ int alloc_pages_range(struct pcb_t *caller, int req_pgnum, struct framephy_struc
  * @incpgnum  : number of mapped page
  * @ret_rg    : returned region
  */
+//Hàm giúp ánh xạ 1 vùng địa chỉ ảo sang Ram thông qua việc xin cấp phát khung trang và kiên kết chúng với các địa chỉ ảo 
+//phục vụ cho việc khi xin thêm rg trong 1 cái vùng nhỏ vma liên tục để lưu cái gì đó trong mm-vm.c, 
 int vm_map_ram(struct pcb_t *caller, int astart, int aend, int mapstart, int incpgnum, struct vm_rg_struct *ret_rg)
 {
   struct framephy_struct *frm_lst = NULL;
-  int ret_alloc;
+  //Lưu danh sách các frame RAM xin được
+  int ret_alloc; 
 
   /*@bksysnet: author provides a feasible solution of getting frames
    *FATAL logic in here, wrong behaviour if we have not enough page
@@ -163,7 +294,7 @@ int vm_map_ram(struct pcb_t *caller, int astart, int aend, int mapstart, int inc
    *duplicate control mechanism, keep it simple
    */
   ret_alloc = alloc_pages_range(caller, incpgnum, &frm_lst);
-
+  
   if (ret_alloc < 0 && ret_alloc != -3000)
     return -1;
 
@@ -189,7 +320,8 @@ int vm_map_ram(struct pcb_t *caller, int astart, int aend, int mapstart, int inc
  * @mpdst  : destination memphy
  * @dstfpn : destination physical page number (FPN)
  **/
-int __swap_cp_page(struct memphy_struct *mpsrc, int srcfpn,
+//Copy 1 frame từ src sang dst ( vật lí sang vật lí)
+ int __swap_cp_page(struct memphy_struct *mpsrc, int srcfpn,
                    struct memphy_struct *mpdst, int dstfpn)
 {
   int cellidx;
@@ -212,6 +344,7 @@ int __swap_cp_page(struct memphy_struct *mpsrc, int srcfpn,
  * @mm:     self mm
  * @caller: mm owner
  */
+//Khởi tạo Memory_Management 
 int init_mm(struct mm_struct *mm, struct pcb_t *caller)
 {
   struct vm_area_struct *vma0 = malloc(sizeof(struct vm_area_struct));
@@ -227,17 +360,18 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
   enlist_vm_rg_node(&vma0->vm_freerg_list, first_rg);
 
   /* TODO update VMA0 next */
-  // vma0->next = ...
+   vma0->vm_next = NULL;
 
   /* Point vma owner backward */
-  vma0->vm_mm = mm; 
+  vma0->vm_mm = mm;  // Trả về
 
   /* TODO: update mmap */
-  //mm->mmap = ...
+  mm->mmap = vma0;
 
   return 0;
 }
 
+//Khởi tạo 1 vm_rg
 struct vm_rg_struct *init_vm_rg(int rg_start, int rg_end)
 {
   struct vm_rg_struct *rgnode = malloc(sizeof(struct vm_rg_struct));
@@ -248,7 +382,7 @@ struct vm_rg_struct *init_vm_rg(int rg_start, int rg_end)
 
   return rgnode;
 }
-
+//Thêm 1 rg vào linked list
 int enlist_vm_rg_node(struct vm_rg_struct **rglist, struct vm_rg_struct *rgnode)
 {
   rgnode->rg_next = *rglist;
@@ -256,13 +390,13 @@ int enlist_vm_rg_node(struct vm_rg_struct **rglist, struct vm_rg_struct *rgnode)
 
   return 0;
 }
-
+//Thêm 1 trang vào danh sách liên kết , chủ yếu dùng để thêm vào fifo_pgn
 int enlist_pgn_node(struct pgn_t **plist, int pgn)
 {
   struct pgn_t *pnode = malloc(sizeof(struct pgn_t));
-
-  pnode->pgn = pgn;
-  pnode->pg_next = *plist;
+  
+  pnode->pgn = pgn; // gán pgn
+  pnode->pg_next = *plist;//thêm vào đầu danh sách, chút có gì lấy thì lấy cuối
   *plist = pnode;
 
   return 0;

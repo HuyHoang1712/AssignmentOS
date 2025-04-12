@@ -34,32 +34,45 @@ static enum ins_opcode_t get_opcode(char * opt) {
 
 struct pcb_t * load(const char * path) {
 	/* Create new PCB for the new process */
+	//Cấp phát 1 vùng nhớ thật lưu pcb_t mới cho tiến trình mới từ file vào 
 	struct pcb_t * proc = (struct pcb_t * )malloc(sizeof(struct pcb_t));
+	//gán p_id = 1 ,2 ,3 ,4 ,...
 	proc->pid = avail_pid;
 	avail_pid++;
+	//Tạo vùng nhớ thật cho việc quản lí phân trang bộ nhớ
 	proc->page_table =
 		(struct page_table_t*)malloc(sizeof(struct page_table_t));
+	
 	proc->bp = PAGE_SIZE;
 	proc->pc = 0;
 
 	/* Read process code from file */
+	//Đọc thogn6 tin tiến trình
 	FILE * file;
 	if ((file = fopen(path, "r")) == NULL) {
 		printf("Cannot find process description at '%s'\n", path);
 		exit(1);		
 	}
+	//Lưu thông tin đường dẫn lại vào proc->path
 	snprintf(proc->path, 2*sizeof(path)+1, "%s", path);
+
 	char opcode[10];
 	proc->code = (struct code_seg_t*)malloc(sizeof(struct code_seg_t));
+	//Cấp phát vùng nhớ cho nơi lưu trữ mã lệnh , chỉ lưu địa chỉ của mảng text , ko lưu mảng text
 	fscanf(file, "%u %u", &proc->priority, &proc->code->size);
+	//Đọc priority , số tiến trình
 	proc->code->text = (struct inst_t*)malloc(
 		sizeof(struct inst_t) * proc->code->size
 	);
+	//Cấp phát vùng nhớ mảng text
 	uint32_t i = 0;
 	char buf[200];
+	//Lặp qua từng dòng lệnh đọc các lệnh
 	for (i = 0; i < proc->code->size; i++) {
 		fscanf(file, "%s", opcode);
 		proc->code->text[i].opcode = get_opcode(opcode);
+		//Lấy op_code là calc alloc,...
+		//Lấy các thông số còn lại thôi.
 		switch(proc->code->text[i].opcode) {
 		case CALC:
 			break;
