@@ -163,6 +163,33 @@ int MEMPHY_dump(struct memphy_struct *mp)
   /*TODO dump memphy contnt mp->storage
    *     for tracing the memory content
    */
+   if (mp == NULL || mp->storage == NULL) {
+      printf("Error: Invalid memory or storage pointer\n");
+      return -1;
+   }
+
+   printf("Memory Dump (Page-wise):\n");
+
+   for (int i = 0; i < mp->maxsz / PAGING_PAGESZ; ++i) {
+      int startAddr = i * PAGING_PAGESZ;  
+      int sum = 0;
+      
+      for (int j = 0; j < PAGING_PAGESZ; ++j) {
+         sum += mp->storage[startAddr + j];
+      }
+
+      if (sum != 0) {
+         printf("Frame %d: ", i);
+
+         for (int j = 0; j < PAGING_PAGESZ; ++j) {
+            printf("%02X ", mp->storage[startAddr + j]);
+         }
+
+         printf("\n");
+      }
+   }
+
+   printf("Memory dump complete.\n");
    return 0;
 }
 
