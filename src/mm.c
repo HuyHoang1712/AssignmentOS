@@ -87,7 +87,7 @@ int vmap_page_range(struct pcb_t *caller,           // process call
                     struct vm_rg_struct *ret_rg)    // return mapped region, the real mapped fp
 {                                                   // no guarantee all given pages are mapped
   if (frames == NULL || pgnum <= 0) {
-    return -1;
+    return -3000; // out of memory
   }
 
   struct framephy_struct *frame_ite = frames;
@@ -98,7 +98,7 @@ int vmap_page_range(struct pcb_t *caller,           // process call
 
   ret_rg->vmaid = vmaid;
   ret_rg->rg_start = addr;
-  ret_rg->rg_end = addr + pgnum * PAGING_PAGESZ;
+  ret_rg->rg_end = ret_rg->rg_start;
   ret_rg->rg_next = NULL;
   
 
@@ -107,17 +107,20 @@ int vmap_page_range(struct pcb_t *caller,           // process call
   *      in page table caller->mm->pgd[]
   */
   for (page_ite = 0; page_ite < pgnum; page_ite++) {
+    caller->mm->pgd[page_num + page_ite] = 0; // Initialize PTE to 0
     uint32_t *pte = &caller->mm->pgd[page_num + page_ite];
-    if (frame_ite == NULL) {
-      return -1; 
+    if (pte == NULL) {
+      return -1; // Invalid page table entry
     }
     if (PAGING_PAGE_PRESENT(*pte)) {
       continue;  
     }
-    pte_set_fpn(pte, frames[page_ite].fpn);
+    pte_set_fpn(pte, frame_ite->fpn);
     frame_ite = frame_ite->fp_next;
     enlist_pgn_node(&caller->mm->fifo_pgn, page_num + page_ite); 
   }
+
+  ret_rg->rg_end = addr + (pgnum-1) * PAGING_PAGESZ;
 
   return 0;
 }
@@ -147,7 +150,14 @@ int alloc_pages_range(struct pcb_t *caller, int req_pgnum, struct framephy_struc
      
       struct framephy_struct *new_frame = malloc(sizeof(struct framephy_struct));
       if (new_frame == NULL) {
-          return -1; 
+          struct framephy_struct *temp = new_frame_str;
+          while (temp != NULL) {
+              MEMPHY_put_freefp(caller->mram, temp->fpn);
+              struct framephy_struct *free_fp = temp;
+              temp = temp->fp_next;
+              free(free_fp);
+          }
+          return -3000; // out of memory
       }
       new_frame->fpn = fpn;
       new_frame->owner = caller->mm;
@@ -162,13 +172,20 @@ int alloc_pages_range(struct pcb_t *caller, int req_pgnum, struct framephy_struc
 
       curr_frame = new_frame; 
 
-      frm_lst[page_ite] = new_frame;
+      //frm_lst[page_ite] = new_frame;
     }
-    else { 
-      return -1;
+    else {
+      while(new_frame_str != NULL) {
+        MEMPHY_put_freefp(caller->mram, new_frame_str->fpn);
+        struct framephy_struct *temp = new_frame_str;
+        new_frame_str = new_frame_str->fp_next;
+        free(temp);
+      }
+      return -3000;
     }
   }
 
+  *frm_lst = new_frame_str;
   return 0;
 }
 
@@ -272,31 +289,7 @@ int init_mm(struct mm_struct *mm, struct pcb_t *caller)
 
   vma0->vm_mm = mm;
 
-  // struct vm_area_struct *vma1 = malloc(sizeof(struct vm_area_struct));
-  // if (!vma1) {
-  //     free(vma0);  
-  //     free(mm->pgd); 
-  //     return -1;
-  // }
-
-  // /* TODO update VMA0 next */
-  // vma0->vm_next = vma1; 
-
-  vma0->vm_next = NULL; // Chưa có vma tiếp theo
-
-  // // Khởi tạo vma1 (heap)
-  // vma1->vm_id = 1;
-  // vma1->vm_start = vma0->vm_end; 
-  // vma1->vm_end = vma1->vm_start + PAGING_PAGESZ; 
-  // vma1->sbrk = vma1->vm_start;
-  // vma1->vm_freerg_list = NULL;
-
-  // struct vm_rg_struct *second_rg = init_vm_rg(vma1->vm_start, vma1->vm_end);
-  // enlist_vm_rg_node(&vma1->vm_freerg_list, second_rg);
-
-  // vma1->vm_next = NULL;  
-
-  // vma1->vm_mm = mm;
+  vma0->vm_next = NULL;
 
   mm->mmap = vma0;
 
